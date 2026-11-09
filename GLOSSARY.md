@@ -4,28 +4,46 @@ Cadence sells video courses to learners. This glossary covers the language aroun
 
 ## Language
 
+### People
+
+**Learner**:
+A user with the Student role who buys and takes courses.
+_Avoid_: Student (outside the role name), customer, buyer
+
+**Admin**:
+A user with the Admin role. Admins decide Refund Requests.
+_Avoid_: The team, support, support member, reviewer
+
 ### Refunds
 
 **Refund Request**:
-A learner's ask, with their reason, to get back what they paid for a purchase. The team approves or declines it. One purchase can have several Refund Requests over time, but only one can be undecided at once.
+A learner's ask, with their reason, to get back what they paid for a purchase. An Admin approves or declines it, or the learner withdraws it first. One purchase can have several Refund Requests over time, but only one can be undecided at once.
 _Avoid_: Refund (for the ask itself), Cancellation, Reversal, Chargeback
 
 **Open Refund Request**:
-A Refund Request the team hasn't decided yet.
+A Refund Request no Admin has decided yet.
 _Avoid_: Pending, Requested, Awaiting review
 
+**Paused Access**:
+A learner's access to a course while they have an Open Refund Request for it. Access comes back if the request is declined or withdrawn, and ends if it is approved.
+_Avoid_: Suspended, locked, frozen
+
 **Approved Refund Request**:
-A Refund Request the team has accepted. Approving it is what leads to a Refund.
+A Refund Request an Admin has accepted. Approving it is what leads to a Refund.
 
 **Declined Refund Request**:
-A Refund Request the team has turned down. It has no Refund, and the learner may raise a new Refund Request.
+A Refund Request an Admin has turned down. It has no Refund, and the learner may raise a new Refund Request.
+
+**Withdrawn Refund Request**:
+A Refund Request the learner took back before an Admin decided it. It has no Refund, and the learner may raise a new Refund Request.
+_Avoid_: Cancelled, retracted, removed
 
 **Refund**:
 The money returned to a learner after their Refund Request is approved. It is always the full amount they paid. A declined Refund Request has no Refund.
 _Avoid_: Reversal, Chargeback, Cancellation
 
 **Pending Refund**:
-A Refund the team has approved where the money hasn't been confirmed as sent yet.
+A Refund whose Refund Request has been approved, where the money hasn't been confirmed as sent yet.
 _Avoid_: Pending (for a Refund Request awaiting review)
 
 **Issued Refund**:

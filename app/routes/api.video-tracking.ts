@@ -4,7 +4,18 @@ import type { Route } from "./+types/api.video-tracking";
 import { getCurrentUserId } from "~/lib/session";
 import { parseJsonBody } from "~/lib/validation";
 import { db } from "~/db";
-import { videoWatchEvents } from "~/db/schema";
+import { lessons, modules, videoWatchEvents } from "~/db/schema";
+import { eq } from "drizzle-orm";
+import { getOpenRefundRequestForCourse } from "~/lib/refunds.server";
+
+function getCourseIdForLesson(lessonId: number) {
+  return db
+    .select({ courseId: modules.courseId })
+    .from(lessons)
+    .innerJoin(modules, eq(lessons.moduleId, modules.id))
+    .where(eq(lessons.id, lessonId))
+    .get()?.courseId;
+}
 
 const videoTrackingSchema = z.object({
   lessonId: z.number(),
@@ -25,6 +36,18 @@ export async function action({ request }: Route.ActionArgs) {
   }
 
   const { lessonId, eventType, positionSeconds } = parsed.data;
+
+  // Watch time counts towards the refund limits, and a paused learner has no
+  // access to watch with (ADR 0001).
+  const courseId = getCourseIdForLesson(lessonId);
+  if (courseId === undefined) {
+    throw data("Lesson not found", { status: 404 });
+  }
+  if (getOpenRefundRequestForCourse(currentUserId, courseId)) {
+    throw data("Your access is paused while your refund request is open.", {
+      status: 403,
+    });
+  }
 
   db
     .insert(videoWatchEvents)

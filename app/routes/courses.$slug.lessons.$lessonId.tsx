@@ -43,6 +43,7 @@ import {
   HelpCircle,
   MapPin,
   PlayCircle,
+  PauseCircle,
   ShieldAlert,
   XCircle,
   Trophy,
@@ -723,7 +724,9 @@ export async function loader({ params, request }: Route.LoaderArgs) {
 
   const access = await getAccess(request, course.id);
   const currentUserId = access.userId;
-  const enrolled = access.enrolled;
+  // A paused learner is treated as not enrolled: no progress, no tracking,
+  // no quizzes until their Refund Request is decided or withdrawn.
+  const enrolled = access.enrolled && !access.refundPaused;
   let lessonStatus: string | null = null;
   let lastWatchPosition = 0;
   let watchProgress = 0;
@@ -862,6 +865,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    refundPaused: access.refundPaused,
     comments,
     canViewContent,
     canModerate: access.isStaff,
@@ -941,6 +945,17 @@ export async function action({ params, request }: Route.ActionArgs) {
         return { ok: false, error: error.message };
       }
       throw error;
+    }
+  }
+
+  // A paused learner can't make progress until their Refund Request is
+  // decided or withdrawn (ADR 0001).
+  if (intent === "mark-complete" || intent === "submit-quiz") {
+    const access = await getAccess(request, course.id);
+    if (access.refundPaused) {
+      throw data("Your access is paused while your refund request is open.", {
+        status: 403,
+      });
     }
   }
 
@@ -1026,6 +1041,7 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
     pppBlocked,
     pppBlockedCountry,
     pppPurchaseCountry,
+    refundPaused,
     comments,
     canViewContent,
     canModerate,
@@ -1054,6 +1070,25 @@ export default function LessonViewer({ loaderData }: Route.ComponentProps) {
 
   const quizResult = quizFetcher.data?.quizResult ?? null;
   const isSubmittingQuiz = quizFetcher.state !== "idle";
+
+  if (refundPaused) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center p-6">
+        <div className="max-w-md text-center">
+          <PauseCircle className="mx-auto mb-4 size-16 text-amber-500" />
+          <h1 className="mb-3 text-2xl font-bold">Your access is paused</h1>
+          <p className="mb-6 text-muted-foreground">
+            Your access to this course is paused while your refund request is
+            open. You can withdraw the request from the course page to get your
+            access back straight away.
+          </p>
+          <Link to={`/courses/${course.slug}`}>
+            <Button variant="outline">Back to Course</Button>
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   if (pppBlocked) {
     const purchaseCountryName = pppPurchaseCountry
