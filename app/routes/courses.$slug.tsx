@@ -14,14 +14,9 @@ import {
   enrollments,
   lessonProgress,
   courseRatings,
-  purchases,
-  coupons,
-  refunds,
-  videoWatchEvents,
   LessonProgressStatus,
-  RefundStatus,
 } from "~/db/schema";
-import { eq, and, or, sql, inArray, isNotNull } from "drizzle-orm";
+import { eq, and, or, sql } from "drizzle-orm";
 import { Card, CardContent, CardHeader } from "~/components/ui/card";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -54,6 +49,10 @@ import {
   getCountryTierInfo,
 } from "~/lib/ppp";
 import { parseFormData } from "~/lib/validation";
+import {
+  getOpenRefundRequestForCourse,
+  getRefundEligibility,
+} from "~/lib/refunds.server";
 import { MAX_RATING, MIN_RATING } from "~/lib/ratings";
 import { StarRating, StarRatingInput } from "~/components/star-rating";
 
@@ -366,125 +365,6 @@ function rateCourse(userId: number, courseId: number, rating: number) {
     .get();
 }
 
-const REFUND_WINDOW_DAYS = 14;
-const REFUND_WATCH_LIMIT_SECONDS = 2 * 60 * 60;
-const REFUND_COMPLETION_LIMIT = 0.5;
-
-function getPurchaseForCourse(userId: number, courseId: number) {
-  return db
-    .select()
-    .from(purchases)
-    .where(and(eq(purchases.userId, userId), eq(purchases.courseId, courseId)))
-    .orderBy(sql`${purchases.createdAt} desc`)
-    .get();
-}
-
-function getOpenRefundRequest(purchaseId: number) {
-  return db
-    .select({ id: refunds.id })
-    .from(refunds)
-    .where(
-      and(
-        eq(refunds.purchaseId, purchaseId),
-        eq(refunds.status, RefundStatus.Open)
-      )
-    )
-    .get();
-}
-
-function getCompletedLessonCount(userId: number, lessonIds: number[]) {
-  if (lessonIds.length === 0) return 0;
-
-  const result = db
-    .select({ count: sql<number>`count(*)` })
-    .from(lessonProgress)
-    .where(
-      and(
-        eq(lessonProgress.userId, userId),
-        eq(lessonProgress.status, LessonProgressStatus.Completed),
-        inArray(lessonProgress.lessonId, lessonIds)
-      )
-    )
-    .get();
-
-  return result?.count ?? 0;
-}
-
-function getSecondsWatched(userId: number, lessonIds: number[]) {
-  if (lessonIds.length === 0) return 0;
-
-  const furthestPerLesson = db
-    .select({
-      furthest: sql<number>`max(${videoWatchEvents.positionSeconds})`,
-    })
-    .from(videoWatchEvents)
-    .where(
-      and(
-        eq(videoWatchEvents.userId, userId),
-        inArray(videoWatchEvents.lessonId, lessonIds)
-      )
-    )
-    .groupBy(videoWatchEvents.lessonId)
-    .all();
-
-  return furthestPerLesson.reduce((total, row) => total + row.furthest, 0);
-}
-
-// Compare whole days, not hours — a purchase at 23:00 should still get its
-// full fourteenth day.
-function asDayString(when: Date) {
-  const year = when.getFullYear();
-  const month = String(when.getMonth() + 1).padStart(2, "0");
-  const day = String(when.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-/**
- * What the learner is offered if they want their money back, or null if this
- * purchase cannot be refunded.
- */
-function getRefundOffer(userId: number, course: { id: number }) {
-  const purchase = getPurchaseForCourse(userId, course.id);
-
-  if (!purchase) return null;
-  if (getOpenRefundRequest(purchase.id)) return null;
-
-  const purchasedDay = asDayString(new Date(purchase.createdAt));
-  const windowEnd = new Date(purchase.createdAt);
-  windowEnd.setDate(windowEnd.getDate() + REFUND_WINDOW_DAYS);
-  const lastDayInWindow = asDayString(windowEnd);
-  const todayDay = asDayString(new Date());
-  const isWithinWindow =
-    todayDay >= purchasedDay && todayDay <= lastDayInWindow;
-
-  if (!isWithinWindow) return null;
-
-  const lessonIds = getCourseLessonIds(course.id);
-
-  if (lessonIds.length > 0) {
-    const completedCount = getCompletedLessonCount(userId, lessonIds);
-    if (completedCount / lessonIds.length >= REFUND_COMPLETION_LIMIT) {
-      return null;
-    }
-  }
-
-  if (getSecondsWatched(userId, lessonIds) >= REFUND_WATCH_LIMIT_SECONDS) {
-    return null;
-  }
-
-  const claimedSeat = db
-    .select({ id: coupons.id })
-    .from(coupons)
-    .where(
-      and(eq(coupons.purchaseId, purchase.id), isNotNull(coupons.redeemedAt))
-    )
-    .get();
-
-  if (claimedSeat) return null;
-
-  return { amount: purchase.amountPaid, lastDayInWindow };
-}
-
 const ratingSchema = z.object({
   rating: z.coerce.number().int().min(MIN_RATING).max(MAX_RATING),
 });
@@ -517,13 +397,20 @@ export async function loader({ params, request }: Route.LoaderArgs) {
   let progress = 0;
   let lessonProgressMap: Record<number, string> = {};
   let nextLessonId: number | null = null;
-  let refundOffer: { amount: number; lastDayInWindow: string } | null = null;
+  let refundOffer: { amount: number } | null = null;
+  let accessPaused = false;
 
   if (currentUserId) {
     enrolled = isUserEnrolled(currentUserId, course.id);
 
     if (enrolled) {
-      refundOffer = getRefundOffer(currentUserId, { id: course.id });
+      // While a Refund Request is open, access is paused (ADR 0001).
+      accessPaused = !!getOpenRefundRequestForCourse(currentUserId, course.id);
+
+      const refund = getRefundEligibility(currentUserId, course.id);
+      if (refund.purchase && refund.eligibility.eligible) {
+        refundOffer = { amount: refund.eligibility.refundAmount };
+      }
 
       progress = calculateProgress(currentUserId, course.id, false);
 
@@ -568,6 +455,7 @@ export async function loader({ params, request }: Route.LoaderArgs) {
     ratingSummary,
     userRating,
     refundOffer,
+    accessPaused,
   };
 }
 
@@ -669,6 +557,7 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
     ratingSummary,
     userRating,
     refundOffer,
+    accessPaused,
   } = loaderData;
   const isInstructor = currentUserId === course.instructorId;
   const [searchParams, setSearchParams] = useSearchParams();
@@ -880,7 +769,9 @@ export default function CourseDetail({ loaderData }: Route.ComponentProps) {
                       style={{ width: `${progress}%` }}
                     />
                   </div>
-                  {course.modules.length > 0 &&
+                  {accessPaused && <PausedAccess slug={course.slug} />}
+                  {!accessPaused &&
+                    course.modules.length > 0 &&
                     (() => {
                       const targetLessonId =
                         nextLessonId ?? course.modules[0].lessons[0]?.id;
@@ -981,6 +872,31 @@ function RateCourse({ userRating }: { userRating: number | null }) {
   );
 }
 
+function PausedAccess({ slug }: { slug: string }) {
+  const fetcher = useFetcher();
+  const isSubmitting = fetcher.state !== "idle";
+
+  return (
+    <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm dark:border-amber-800 dark:bg-amber-950/30">
+      <p className="font-medium">Your access is paused</p>
+      <p className="mt-1 text-muted-foreground">
+        Your access to this course is paused while your refund request is open.
+        Changed your mind? Withdraw it and your access comes straight back.
+      </p>
+      <fetcher.Form
+        method="post"
+        action={`/courses/${slug}/refund`}
+        className="mt-3"
+      >
+        <input type="hidden" name="intent" value="withdraw" />
+        <Button type="submit" size="sm" variant="outline" disabled={isSubmitting}>
+          {isSubmitting ? "Withdrawing..." : "Withdraw my refund request"}
+        </Button>
+      </fetcher.Form>
+    </div>
+  );
+}
+
 function RequestRefund({ slug, amount }: { slug: string; amount: number }) {
   const fetcher = useFetcher<{ errors?: Record<string, string> }>();
   const [isFormOpen, setIsFormOpen] = useState(false);
@@ -1012,14 +928,16 @@ function RequestRefund({ slug, amount }: { slug: string; amount: number }) {
     <div className="border-t pt-4">
       <p className="mb-2 text-sm font-medium">Request a refund</p>
       <p className="mb-3 text-xs text-muted-foreground">
-        We will send {formatPrice(amount)} back to the card you paid with, once
-        someone has read your note.
+        We will send {formatPrice(amount)} back to the card you paid with once
+        an admin has approved it. Your access to the course is paused while
+        your request is open.
       </p>
       <fetcher.Form
         method="post"
         action={`/courses/${slug}/refund`}
         className="space-y-2"
       >
+        <input type="hidden" name="intent" value="raise" />
         <Textarea
           name="reason"
           rows={3}

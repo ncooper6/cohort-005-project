@@ -35,6 +35,7 @@ export enum RefundStatus {
   Open = "open",
   Approved = "approved",
   Declined = "declined",
+  Withdrawn = "withdrawn",
 }
 
 export enum TeamMemberRole {
@@ -242,8 +243,10 @@ export const refunds = sqliteTable(
       .default(RefundStatus.Open),
     // The learner's own words, in the box on the course page.
     reason: text("reason").notNull(),
-    // Null until someone approves — a declined request refunds nothing.
+    // Null until an Admin approves — a declined or withdrawn request refunds nothing.
     amountRefunded: integer("amount_refunded"),
+    // The Admin's reason, shown to the learner. Required when declining.
+    decisionNote: text("decision_note"),
     requestedAt: text("requested_at")
       .notNull()
       .$defaultFn(() => new Date().toISOString()),

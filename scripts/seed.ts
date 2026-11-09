@@ -2725,8 +2725,10 @@ This course is still in draft while the cluster examples are rewritten against t
   );
 
   // ─── Liam's Refund Request ───
-  // One learner with an Open Refund Request. The dates count back from
-  // today, so the fourteen-day refund window is still open whenever you seed.
+  // One learner with an Open Refund Request, raised after he withdrew an
+  // earlier one — so the Admin screen shows earlier requests. The dates count
+  // back from today, so the fourteen-day refund window is still open whenever
+  // you seed.
 
   const liam = studentByEmail("liam@example.com");
   const [liamPurchase] = db
@@ -2773,15 +2775,83 @@ This course is still in draft while the cluster examples are rewritten against t
     })
     .run();
   db.insert(schema.refunds)
+    .values([
+      {
+        purchaseId: liamPurchase.id,
+        status: RefundStatus.Withdrawn,
+        reason: "Not sure this is the right level for me yet.",
+        requestedAt: daysAgo(6),
+        resolvedAt: daysAgo(5),
+      },
+      {
+        purchaseId: liamPurchase.id,
+        status: RefundStatus.Open,
+        reason: "Bought the wrong one, I meant the advanced course.",
+        requestedAt: daysAgo(4),
+      },
+    ])
+    .run();
+
+  console.log("Created Liam's Refund Requests (1 withdrawn, 1 open).");
+
+  // ─── Decided Refund Requests ───
+  // One Approved and one Declined, so every tab on the Admin screen has
+  // something in it. Sophia's enrollment has ended because her Refund Request
+  // was approved; James keeps his because his was declined.
+
+  const sophia = studentByEmail("sophia.davis@student.dev");
+  const [sophiaPurchase] = db
+    .insert(schema.purchases)
     .values({
-      purchaseId: liamPurchase.id,
-      status: RefundStatus.Open,
-      reason: "Bought the wrong one, I meant the advanced course.",
-      requestedAt: daysAgo(4),
+      userId: sophia.id,
+      courseId: course3.id,
+      amountPaid: course3.price,
+      country: null,
+      createdAt: daysAgo(12),
+    })
+    .returning()
+    .all();
+  db.insert(schema.refunds)
+    .values({
+      purchaseId: sophiaPurchase.id,
+      status: RefundStatus.Approved,
+      reason: "My employer ended up buying me a team seat for this course.",
+      requestedAt: daysAgo(10),
+      amountRefunded: sophiaPurchase.amountPaid,
+      resolvedAt: daysAgo(9),
+      resolvedByUserId: admin.id,
     })
     .run();
 
-  console.log("Created Liam's Refund Request.");
+  const james = studentByEmail("james.park@student.dev");
+  const [jamesPurchase] = db
+    .insert(schema.purchases)
+    .values({
+      userId: james.id,
+      courseId: course3.id,
+      amountPaid: course3.price,
+      country: null,
+      createdAt: daysAgo(11),
+    })
+    .returning()
+    .all();
+  db.insert(schema.enrollments)
+    .values({ userId: james.id, courseId: course3.id, enrolledAt: daysAgo(11) })
+    .run();
+  db.insert(schema.refunds)
+    .values({
+      purchaseId: jamesPurchase.id,
+      status: RefundStatus.Declined,
+      reason: "Didn't like it.",
+      decisionNote:
+        "We need a bit more detail to approve this. Tell us what didn't work for you and raise a new request.",
+      requestedAt: daysAgo(8),
+      resolvedAt: daysAgo(7),
+      resolvedByUserId: admin.id,
+    })
+    .run();
+
+  console.log("Created 1 approved and 1 declined Refund Request.");
 
   // ─── Flush watch events ───
   // Batched: the heartbeat makes these by far the largest table, and one
@@ -2833,6 +2903,9 @@ This course is still in draft while the cluster examples are rewritten against t
   );
   console.log(
     `  Purchases: ${countRows(schema.purchases)} (${countRows(schema.purchases, gte(schema.purchases.createdAt, sevenDaysAgo))} in the last 7 days), spanning ${historyDays} days`
+  );
+  console.log(
+    `  Refund requests: ${countRows(schema.refunds)} (${countRows(schema.refunds, eq(schema.refunds.status, RefundStatus.Open))} open)`
   );
   console.log(
     `  Teams: ${countRows(schema.teams)}, coupons: ${countRows(schema.coupons)} (${countRows(schema.coupons, isNotNull(schema.coupons.redeemedByUserId))} redeemed)`
