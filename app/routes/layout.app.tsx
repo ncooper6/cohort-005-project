@@ -3,6 +3,13 @@ import type { Route } from "./+types/layout.app";
 import { Sidebar } from "~/components/sidebar";
 import { DevUI } from "~/components/dev-ui";
 import { Toaster } from "sonner";
+import {
+  NotificationsProvider,
+  useNotifications,
+  VariantABell,
+  VariantBPanel,
+  VariantCNavItem,
+} from "~/components/notifications.prototype";
 import { getCurrentUserId, getDevCountry } from "~/lib/session";
 import { getCountryTierInfo, COUNTRIES } from "~/lib/ppp";
 import { eq, and, or, sql, desc } from "drizzle-orm";
@@ -228,8 +235,13 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
   } = loaderData;
 
   return (
+    <NotificationsProvider
+      key={currentUser?.id ?? "anon"}
+      role={currentUser?.role ?? null}
+      isTeamAdmin={userIsTeamAdmin}
+    >
     <div className="flex h-screen overflow-hidden">
-      <Sidebar
+      <PrototypeSidebar
         currentUser={currentUser}
         recentCourses={recentCourses}
         isTeamAdmin={userIsTeamAdmin}
@@ -244,7 +256,27 @@ export default function AppLayout({ loaderData }: Route.ComponentProps) {
         countryTierInfo={countryTierInfo}
         countries={countries}
       />
-      <Toaster position="bottom-right" richColors closeButton />
+      <Toaster position="top-right" richColors closeButton />
     </div>
+    </NotificationsProvider>
+  );
+}
+
+// PROTOTYPE: mounts the active Notifications variant into the sidebar.
+function PrototypeSidebar(props: React.ComponentProps<typeof Sidebar>) {
+  const { variant } = useNotifications();
+  const loggedIn = !!props.currentUser;
+  return (
+    <Sidebar
+      {...props}
+      headerExtra={loggedIn && variant === "A" ? <VariantABell /> : null}
+      navExtra={
+        !loggedIn ? null : variant === "B" ? (
+          <VariantBPanel />
+        ) : variant === "C" ? (
+          <VariantCNavItem />
+        ) : null
+      }
+    />
   );
 }
